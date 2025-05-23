@@ -1,57 +1,53 @@
-import { QueryClient } from "@tanstack/react-query";
-import type { QueryFunction } from "@tanstack/react-query";
-
-async function throwIfResNotOk(res: Response) {
-  if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
-  }
-}
-
-export async function apiRequest(
-  method: string,
-  url: string,
-  data?: unknown | undefined,
-): Promise<Response> {
-  const res = await fetch(url, {
-    method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
-  });
-
-  await throwIfResNotOk(res);
-  return res;
-}
-
-type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
-  on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
-    const res = await fetch(queryKey[0] as string, {
-      credentials: "include",
-    });
-
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-      return null;
-    }
-
-    await throwIfResNotOk(res);
-    return await res.json();
-  };
+import { QueryClient } from '@tanstack/react-query';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchInterval: false,
-      refetchOnWindowFocus: false,
+      // Time in milliseconds that the data is considered fresh
       staleTime: 5 * 60 * 1000, // 5 minutes
-      retry: false,
+      
+      // Time that data stays in cache
+      gcTime: 10 * 60 * 1000, // 10 minutes (previously cacheTime)
+      
+      // Retry failed requests
+      retry: (failureCount, error: any) => {
+        // Don't retry on 4xx errors (client errors)
+        if (error?.status >= 400 && error?.status < 500) {
+          return false;
+        }
+        // Retry up to 3 times for other errors
+        return failureCount < 3;
+      },
+      
+      // Retry delay with exponential backoff
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+      
+      // Background refetch settings
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      refetchOnMount: true,
     },
     mutations: {
-      retry: false,
+      // Retry mutations once on failure
+      retry: 1,
+      
+      // Mutation retry delay
+      retryDelay: 1000,
     },
   },
 });
+
+// Add global error handler for development
+if (process.env.NODE_ENV === 'development') {
+  queryClient.setMutationDefaults(['error'], {
+    onError: (error) => {
+      console.error('React Query Mutation Error:', error);
+    },
+  });
+  
+  queryClient.setQueryDefaults(['error'], {
+    onError: (error) => {
+      console.error('React Query Error:', error);
+    },
+  });
+}
